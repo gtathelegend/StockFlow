@@ -5,7 +5,7 @@ def validate_product_data(data):
     """Validate incoming product creation data and return a list of errors."""
     errors = []
 
-    if not data:
+    if data is None:
         return ["Request body must be valid JSON"]
 
     # Required fields

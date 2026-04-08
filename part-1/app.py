@@ -1,5 +1,5 @@
 from flask import Flask
-from models import db
+from models import db, Warehouse
 from routes import products_bp
 
 
@@ -17,6 +17,11 @@ def create_app(config=None):
 
     with app.app_context():
         db.create_all()
+        # Seed a default warehouse if none exist
+        if not Warehouse.query.first():
+            db.session.add(Warehouse(name="Main Warehouse", location="New York"))
+            db.session.add(Warehouse(name="West Coast Warehouse", location="Los Angeles"))
+            db.session.commit()
 
     return app
 

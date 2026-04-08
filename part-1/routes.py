@@ -23,7 +23,7 @@ def create_product():
 
     # --- Warehouse existence check (if provided) ---
     if data.get("warehouse_id") is not None:
-        warehouse = Warehouse.query.get(data["warehouse_id"])
+        warehouse = db.session.get(Warehouse, data["warehouse_id"])
         if not warehouse:
             return jsonify({"error": "Warehouse not found"}), 404
 
