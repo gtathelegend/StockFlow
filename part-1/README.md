@@ -257,3 +257,374 @@ curl -X POST http://localhost:5000/api/products \
 // 404 - Invalid warehouse
 {"error": "Warehouse not found"}
 ```
+
+---
+
+## API Test Cases (Postman)
+
+Start the server first:
+
+```bash
+cd part-1
+pip install -r requirements.txt
+python app.py
+```
+
+The server runs on `http://127.0.0.1:5000`. Two seed warehouses (id=1, id=2) are created automatically.
+
+All requests below are **POST** to `http://127.0.0.1:5000/api/products` with header `Content-Type: application/json`.
+
+---
+
+### Test 1: Create product with inventory (201 Created)
+
+**Body:**
+```json
+{
+  "name": "Wireless Mouse",
+  "sku": "WM-001",
+  "price": 29.99,
+  "warehouse_id": 1,
+  "initial_quantity": 100
+}
+```
+
+**Expected:**
+```json
+{
+  "message": "Product created",
+  "product_id": 1
+}
+```
+
+**Verify:** Status code = `201`. Response contains `product_id`.
+
+---
+
+### Test 2: Create product without inventory (201 Created)
+
+**Body:**
+```json
+{
+  "name": "USB Cable",
+  "sku": "USB-001",
+  "price": 9.99
+}
+```
+
+**Expected:** Status `201`. Product is created with no inventory record.
+
+---
+
+### Test 3: Create product with integer price (201 Created)
+
+**Body:**
+```json
+{
+  "name": "Bolt Pack",
+  "sku": "BLT-001",
+  "price": 5
+}
+```
+
+**Expected:** Status `201`. Integer prices are accepted and stored correctly.
+
+---
+
+### Test 4: Create product with zero initial quantity (201 Created)
+
+**Body:**
+```json
+{
+  "name": "New Widget",
+  "sku": "NW-001",
+  "price": 14.99,
+  "warehouse_id": 1,
+  "initial_quantity": 0
+}
+```
+
+**Expected:** Status `201`. Inventory record created with quantity=0.
+
+---
+
+### Test 5: Duplicate SKU (409 Conflict)
+
+Send Test 1 again (same SKU `WM-001`):
+
+**Body:**
+```json
+{
+  "name": "Different Mouse",
+  "sku": "WM-001",
+  "price": 19.99
+}
+```
+
+**Expected:**
+```json
+{
+  "error": "A product with this SKU already exists"
+}
+```
+
+**Verify:** Status code = `409`.
+
+---
+
+### Test 6: Missing required fields (400 Bad Request)
+
+**Body:**
+```json
+{
+  "name": "Keyboard"
+}
+```
+
+**Expected:**
+```json
+{
+  "errors": ["'sku' is required", "'price' is required"]
+}
+```
+
+**Verify:** Status `400`. Both missing fields listed.
+
+---
+
+### Test 7: Empty body (400 Bad Request)
+
+Send with **no body** or empty body `{}`.
+
+**Expected:**
+```json
+{
+  "errors": ["Request body must be valid JSON"]
+}
+```
+or (for `{}`):
+```json
+{
+  "errors": ["'name' is required", "'sku' is required", "'price' is required"]
+}
+```
+
+**Verify:** Status `400`.
+
+---
+
+### Test 8: Invalid JSON (400 Bad Request)
+
+Set body to raw text: `this is not json` with `Content-Type: application/json`.
+
+**Expected:** Status `400`.
+
+---
+
+### Test 9: Negative price (400 Bad Request)
+
+**Body:**
+```json
+{
+  "name": "Bad Product",
+  "sku": "BAD-001",
+  "price": -10
+}
+```
+
+**Expected:**
+```json
+{
+  "errors": ["'price' must be a positive number"]
+}
+```
+
+**Verify:** Status `400`.
+
+---
+
+### Test 10: Zero price (400 Bad Request)
+
+**Body:**
+```json
+{
+  "name": "Free Product",
+  "sku": "FREE-001",
+  "price": 0
+}
+```
+
+**Expected:** Status `400`. Price must be positive.
+
+---
+
+### Test 11: Non-numeric price (400 Bad Request)
+
+**Body:**
+```json
+{
+  "name": "Bad Price",
+  "sku": "BP-001",
+  "price": "free"
+}
+```
+
+**Expected:**
+```json
+{
+  "errors": ["'price' must be a valid decimal number"]
+}
+```
+
+---
+
+### Test 12: Nonexistent warehouse (404 Not Found)
+
+**Body:**
+```json
+{
+  "name": "Monitor",
+  "sku": "MON-001",
+  "price": 299.99,
+  "warehouse_id": 9999
+}
+```
+
+**Expected:**
+```json
+{
+  "error": "Warehouse not found"
+}
+```
+
+**Verify:** Status `404`.
+
+---
+
+### Test 13: Invalid warehouse_id type (400 Bad Request)
+
+**Body:**
+```json
+{
+  "name": "Monitor",
+  "sku": "MON-002",
+  "price": 299.99,
+  "warehouse_id": "abc"
+}
+```
+
+**Expected:** Status `400`. Error about warehouse_id type.
+
+---
+
+### Test 14: Negative initial_quantity (400 Bad Request)
+
+**Body:**
+```json
+{
+  "name": "Bad Qty",
+  "sku": "BQ-001",
+  "price": 10,
+  "warehouse_id": 1,
+  "initial_quantity": -5
+}
+```
+
+**Expected:** Status `400`. Error about initial_quantity.
+
+---
+
+### Test 15: Float initial_quantity (400 Bad Request)
+
+**Body:**
+```json
+{
+  "name": "Float Qty",
+  "sku": "FQ-001",
+  "price": 10,
+  "warehouse_id": 1,
+  "initial_quantity": 3.5
+}
+```
+
+**Expected:** Status `400`. Quantity must be an integer.
+
+---
+
+### Test 16: Blank name and SKU (400 Bad Request)
+
+**Body:**
+```json
+{
+  "name": "   ",
+  "sku": "   ",
+  "price": 10
+}
+```
+
+**Expected:** Status `400`. Both name and sku flagged as required (whitespace-only is rejected).
+
+---
+
+### Test 17: Decimal precision price (201 Created)
+
+**Body:**
+```json
+{
+  "name": "Precision Widget",
+  "sku": "PW-001",
+  "price": 19.99
+}
+```
+
+**Expected:** Status `201`. Price stored as exact decimal `19.99`, not `19.989999...`.
+
+---
+
+### Test 18: Multiple errors at once (400 Bad Request)
+
+**Body:**
+```json
+{
+  "warehouse_id": -1,
+  "initial_quantity": -5
+}
+```
+
+**Expected:** Status `400`. Multiple errors returned:
+```json
+{
+  "errors": [
+    "'name' is required",
+    "'sku' is required",
+    "'price' is required",
+    "'warehouse_id' must be a positive integer",
+    "'initial_quantity' must be a non-negative integer"
+  ]
+}
+```
+
+---
+
+### Test Summary
+
+| # | Test Case | Method | Expected Status |
+|---|-----------|--------|----------------|
+| 1 | Create with inventory | POST | 201 |
+| 2 | Create without inventory | POST | 201 |
+| 3 | Integer price | POST | 201 |
+| 4 | Zero initial quantity | POST | 201 |
+| 5 | Duplicate SKU | POST | 409 |
+| 6 | Missing fields | POST | 400 |
+| 7 | Empty body | POST | 400 |
+| 8 | Invalid JSON | POST | 400 |
+| 9 | Negative price | POST | 400 |
+| 10 | Zero price | POST | 400 |
+| 11 | Non-numeric price | POST | 400 |
+| 12 | Nonexistent warehouse | POST | 404 |
+| 13 | Invalid warehouse_id type | POST | 400 |
+| 14 | Negative quantity | POST | 400 |
+| 15 | Float quantity | POST | 400 |
+| 16 | Blank name/SKU | POST | 400 |
+| 17 | Decimal precision | POST | 201 |
+| 18 | Multiple errors | POST | 400 |

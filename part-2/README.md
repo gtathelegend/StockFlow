@@ -430,10 +430,250 @@ python -m pytest test_schema.py -v
 
 ---
 
+## API Test Cases (Manual Verification via Python Shell)
+
+Part 2 has no running API server -- it is a schema design. To manually verify constraints and relationships, use the Python shell:
+
+```bash
+cd part-2
+pip install -r requirements.txt
+python
+```
+
+Then run the test scenarios below inside the shell.
+
+---
+
+### Test 1: Create a company and verify relationships
+
+```python
+from flask import Flask
+from models import db, Company, Warehouse, Product
+from decimal import Decimal
+
+app = Flask(__name__)
+app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
+db.init_app(app)
+ctx = app.app_context()
+ctx.push()
+db.create_all()
+
+c = Company(name="Acme Corp")
+db.session.add(c)
+db.session.commit()
+print(f"Company created: id={c.id}, name={c.name}")
+# Expected: Company created: id=1, name=Acme Corp
+```
+
+---
+
+### Test 2: Warehouse names unique within a company
+
+```python
+from models import Warehouse
+wh1 = Warehouse(company_id=c.id, name="East", location="NYC")
+db.session.add(wh1)
+db.session.commit()
+print(f"Warehouse 1: id={wh1.id}")
+
+# Duplicate name for same company should fail
+try:
+    wh_dup = Warehouse(company_id=c.id, name="East", location="Other")
+    db.session.add(wh_dup)
+    db.session.commit()
+    print("ERROR: duplicate was allowed!")
+except Exception as e:
+    db.session.rollback()
+    print(f"Correctly blocked: {type(e).__name__}")
+# Expected: Correctly blocked: IntegrityError
+```
+
+---
+
+### Test 3: Same warehouse name in different company is allowed
+
+```python
+c2 = Company(name="Other Corp")
+db.session.add(c2)
+db.session.commit()
+wh_other = Warehouse(company_id=c2.id, name="East", location="Boston")
+db.session.add(wh_other)
+db.session.commit()
+print(f"Cross-company warehouse created: id={wh_other.id}")
+# Expected: no error, warehouse created
+```
+
+---
+
+### Test 4: SKU unique per company, not globally
+
+```python
+p1 = Product(company_id=c.id, name="Widget", sku="W-001", price=Decimal("10.00"))
+db.session.add(p1)
+db.session.commit()
+print(f"Product 1: id={p1.id}")
+
+# Same SKU, different company -- should succeed
+p2 = Product(company_id=c2.id, name="Widget", sku="W-001", price=Decimal("10.00"))
+db.session.add(p2)
+db.session.commit()
+print(f"Cross-company same SKU: id={p2.id}")
+
+# Same SKU, same company -- should fail
+try:
+    p3 = Product(company_id=c.id, name="Other", sku="W-001", price=Decimal("5.00"))
+    db.session.add(p3)
+    db.session.commit()
+    print("ERROR: duplicate SKU was allowed!")
+except Exception as e:
+    db.session.rollback()
+    print(f"Correctly blocked: {type(e).__name__}")
+# Expected: Correctly blocked: IntegrityError
+```
+
+---
+
+### Test 5: Product in multiple warehouses via inventory
+
+```python
+from models import Inventory
+wh2 = Warehouse(company_id=c.id, name="West", location="LA")
+db.session.add(wh2)
+db.session.commit()
+
+inv1 = Inventory(product_id=p1.id, warehouse_id=wh1.id, quantity=50)
+inv2 = Inventory(product_id=p1.id, warehouse_id=wh2.id, quantity=30)
+db.session.add_all([inv1, inv2])
+db.session.commit()
+print(f"Inventories: {len(p1.inventories)} records")
+# Expected: Inventories: 2 records
+```
+
+---
+
+### Test 6: Cannot delete product that has inventory (RESTRICT)
+
+```python
+try:
+    db.session.delete(p1)
+    db.session.commit()
+    print("ERROR: product with inventory was deleted!")
+except Exception as e:
+    db.session.rollback()
+    print(f"Correctly blocked: {type(e).__name__}")
+# Expected: Correctly blocked: IntegrityError
+```
+
+---
+
+### Test 7: Bundle cannot reference itself
+
+```python
+from models import BundleComponent
+bundle = Product(company_id=c.id, name="Bundle", sku="B-001", price=Decimal("20.00"), product_type="bundle")
+db.session.add(bundle)
+db.session.commit()
+
+try:
+    bc = BundleComponent(bundle_product_id=bundle.id, component_product_id=bundle.id, component_quantity=1)
+    db.session.add(bc)
+    db.session.commit()
+    print("ERROR: self-reference was allowed!")
+except Exception as e:
+    db.session.rollback()
+    print(f"Correctly blocked: {type(e).__name__}")
+# Expected: Correctly blocked: IntegrityError
+```
+
+---
+
+### Test 8: Inventory movement audit trail
+
+```python
+from models import InventoryMovement
+mov = InventoryMovement(
+    inventory_id=inv1.id, change_type="purchase",
+    quantity_change=50, quantity_before=0, quantity_after=50,
+    note="Initial stock"
+)
+db.session.add(mov)
+db.session.commit()
+print(f"Movement created: id={mov.id}, type={mov.change_type}")
+print(f"Movements for inv1: {len(inv1.movements)}")
+# Expected: 1 movement linked to inventory
+```
+
+---
+
+### Test 9: Cannot delete inventory that has movements (RESTRICT)
+
+```python
+try:
+    db.session.delete(inv1)
+    db.session.commit()
+    print("ERROR: inventory with movements was deleted!")
+except Exception as e:
+    db.session.rollback()
+    print(f"Correctly blocked: {type(e).__name__}")
+# Expected: Correctly blocked: IntegrityError
+```
+
+---
+
+### Test 10: Warehouse transfer cannot have same source and destination
+
+```python
+from models import WarehouseTransfer
+try:
+    t = WarehouseTransfer(
+        product_id=p1.id, source_warehouse_id=wh1.id,
+        dest_warehouse_id=wh1.id, quantity=10
+    )
+    db.session.add(t)
+    db.session.commit()
+    print("ERROR: same-warehouse transfer was allowed!")
+except Exception as e:
+    db.session.rollback()
+    print(f"Correctly blocked: {type(e).__name__}")
+# Expected: Correctly blocked: IntegrityError
+```
+
+---
+
+### Test 11: Product model has no warehouse_id column
+
+```python
+columns = [col.name for col in Product.__table__.columns]
+print(f"Product columns: {columns}")
+assert "warehouse_id" not in columns
+print("Confirmed: warehouse_id is NOT on Product")
+# Expected: warehouse_id is NOT on Product
+```
+
+---
+
+### Test Summary
+
+| # | Test Case | Expected Result |
+| --- | --- | --- |
+| 1 | Create company | Success, id assigned |
+| 2 | Duplicate warehouse name (same company) | IntegrityError |
+| 3 | Same warehouse name (different company) | Success |
+| 4 | Duplicate SKU same company / different company | Blocked / Allowed |
+| 5 | Product in multiple warehouses | 2 inventory records |
+| 6 | Delete product with inventory | IntegrityError (RESTRICT) |
+| 7 | Bundle self-reference | IntegrityError |
+| 8 | Inventory movement audit trail | Movement linked to inventory |
+| 9 | Delete inventory with movements | IntegrityError (RESTRICT) |
+| 10 | Transfer same source and dest | IntegrityError |
+| 11 | Product has no warehouse_id | Column absent |
+
+---
+
 ## Files
 
 | File | Purpose |
-|------|---------|
+| --- | --- |
 | `schema.sql` | PostgreSQL DDL -- the complete schema in raw SQL |
 | `models.py` | SQLAlchemy ORM models matching the DDL |
 | `test_schema.py` | 35 pytest tests for constraints and relationships |

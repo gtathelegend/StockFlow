@@ -245,13 +245,315 @@ python -m pytest test_alerts.py -v
 
 ---
 
+## API Test Cases (Postman)
+
+### Setup
+
+```bash
+cd part-3
+pip install -r requirements.txt
+python seed.py    # populate database with test data
+python app.py     # starts server on http://127.0.0.1:5001
+```
+
+The seed script creates:
+
+- **Company 1** (Acme Corp) with 2 active warehouses, 1 inactive warehouse, 9 products, 2 suppliers
+- **Company 2** (Other Corp) with 1 warehouse, 1 product (for cross-tenant isolation testing)
+
+**Expected alerts for Company 1:** 7 total (sorted by urgency)
+
+| Product | SKU | Warehouse | Stock | Threshold | Why Alert |
+| --- | --- | --- | --- | --- | --- |
+| Widget A | WID-001 | East | 5 | 20 | Low stock, recent sales |
+| Gadget B | GDG-002 | East | 3 | 20 | Low stock, no supplier |
+| Multi-WH G | MWH-007 | West | 4 | 20 | Low in west warehouse |
+| Reserved I | RSV-009 | East | 10 (avail) | 20 | qty=30, reserved=20 |
+| Multi-WH G | MWH-007 | East | 8 | 20 | Low in east warehouse |
+| Bundle F | BND-006 | West | 10 | 15 | Bundle threshold=15 |
+| Custom Thresh H | CTH-008 | East | 18 | 25 | Custom reorder_level=25 |
+
+**NOT expected (filtered out):**
+
+- Bolt C -- stock=100, above threshold
+- Stale Item D -- no recent sales
+- Discontinued E -- is_active=False
+- Widget A in Closed WH -- warehouse is_active=False
+- Other Corp's product -- different company
+
+All requests below are **GET** with no body.
+
+---
+
+### Test 1: Happy path -- all alerts for Acme Corp
+
+```
+GET http://127.0.0.1:5001/api/companies/1/alerts/low-stock
+```
+
+**Expected:** Status `200`, `total_alerts` = 7
+
+**Verify:**
+
+- First alert has lowest `days_until_stockout` (most urgent)
+- Last alert has highest `days_until_stockout` (least urgent)
+- Gadget B has `"supplier": null`
+- Reserved Stock I shows `current_stock` = 10 (not 30)
+- Custom Thresh H shows `threshold` = 25 (not default 20)
+- Bundle F shows `threshold` = 15 (bundle default)
+- Multi-WH G appears **twice** (once per warehouse)
+
+---
+
+### Test 2: Company not found (404)
+
+```
+GET http://127.0.0.1:5001/api/companies/99999/alerts/low-stock
+```
+
+**Expected:**
+
+```json
+{
+  "error": "Company not found"
+}
+```
+
+Status `404`.
+
+---
+
+### Test 3: Cross-tenant isolation -- Other Corp
+
+```
+GET http://127.0.0.1:5001/api/companies/2/alerts/low-stock
+```
+
+**Expected:** Status `200`, `total_alerts` = 0.
+
+Other Corp's low-stock product should NOT appear in Acme's results (Test 1), and Company 2 has no products with sales within the default 30-day window matching its own data.
+
+---
+
+### Test 4: Pagination -- limit
+
+```
+GET http://127.0.0.1:5001/api/companies/1/alerts/low-stock?limit=2
+```
+
+**Expected:** Status `200`, `total_alerts` = 7, but `alerts` array has only 2 items. `limit` = 2, `offset` = 0.
+
+---
+
+### Test 5: Pagination -- offset
+
+```
+GET http://127.0.0.1:5001/api/companies/1/alerts/low-stock?limit=2&offset=2
+```
+
+**Expected:** Status `200`, `total_alerts` = 7, `alerts` array has 2 items (items 3-4). Alerts are different from Test 4.
+
+---
+
+### Test 6: Pagination -- offset beyond total
+
+```
+GET http://127.0.0.1:5001/api/companies/1/alerts/low-stock?offset=100
+```
+
+**Expected:** Status `200`, `total_alerts` = 7, `alerts` = empty array `[]`.
+
+---
+
+### Test 7: Custom lookback window -- 20 days
+
+```
+GET http://127.0.0.1:5001/api/companies/1/alerts/low-stock?days=20
+```
+
+**Expected:** Status `200`. Fewer alerts than Test 1 because products whose sales are all older than 20 days are excluded.
+
+---
+
+### Test 8: Very short lookback window -- 1 day
+
+```
+GET http://127.0.0.1:5001/api/companies/1/alerts/low-stock?days=1
+```
+
+**Expected:** Status `200`, `total_alerts` = 0 or very few. Most seed sales are older than 1 day.
+
+---
+
+### Test 9: Invalid `days` parameter (400)
+
+```
+GET http://127.0.0.1:5001/api/companies/1/alerts/low-stock?days=abc
+```
+
+**Expected:**
+
+```json
+{
+  "error": "Invalid query parameters"
+}
+```
+
+Status `400`.
+
+---
+
+### Test 10: Negative `days` parameter (400)
+
+```
+GET http://127.0.0.1:5001/api/companies/1/alerts/low-stock?days=-5
+```
+
+**Expected:**
+
+```json
+{
+  "error": "days and limit must be >= 1, offset must be >= 0"
+}
+```
+
+Status `400`.
+
+---
+
+### Test 11: Zero `limit` (400)
+
+```
+GET http://127.0.0.1:5001/api/companies/1/alerts/low-stock?limit=0
+```
+
+**Expected:** Status `400`.
+
+---
+
+### Test 12: Negative `offset` (400)
+
+```
+GET http://127.0.0.1:5001/api/companies/1/alerts/low-stock?offset=-1
+```
+
+**Expected:** Status `400`.
+
+---
+
+### Test 13: Verify supplier data structure
+
+From Test 1's response, find the Widget A alert and verify:
+
+```json
+{
+  "supplier": {
+    "id": 1,
+    "name": "Parts Corp",
+    "contact_email": "orders@parts.com",
+    "lead_time_days": 7,
+    "cost_price": 8.0
+  }
+}
+```
+
+Widget A has two suppliers (Parts Corp as primary, Global Supply as secondary). The endpoint should return the **primary** supplier.
+
+---
+
+### Test 14: Verify null supplier
+
+From Test 1's response, find the Gadget B alert:
+
+```json
+{
+  "product_name": "Gadget B",
+  "sku": "GDG-002",
+  "supplier": null
+}
+```
+
+Gadget B has no linked supplier. The alert still appears with `supplier: null`.
+
+---
+
+### Test 15: Verify reserved stock deduction
+
+From Test 1's response, find the Reserved Stock I alert:
+
+```json
+{
+  "product_name": "Reserved Stock I",
+  "sku": "RSV-009",
+  "current_stock": 10
+}
+```
+
+The raw `quantity` is 30 and `reserved_quantity` is 20. The endpoint returns `current_stock` = 10 (available stock).
+
+---
+
+### Test 16: Verify custom reorder_level threshold
+
+From Test 1's response, find the Custom Thresh H alert:
+
+```json
+{
+  "product_name": "Custom Thresh H",
+  "sku": "CTH-008",
+  "current_stock": 18,
+  "threshold": 25
+}
+```
+
+Default threshold for "normal" products is 20, but this product's inventory has `reorder_level=25`. The custom value takes priority.
+
+---
+
+### Test 17: Verify sorting order
+
+From Test 1's response, check the `days_until_stockout` values are in ascending order:
+
+```text
+alerts[0].days_until_stockout <= alerts[1].days_until_stockout <= ... <= alerts[6].days_until_stockout
+```
+
+Most urgent alerts (fewest days until stockout) appear first.
+
+---
+
+### Test Summary
+
+| # | Test Case | URL Params | Expected Status | Expected Alerts |
+| --- | --- | --- | --- | --- |
+| 1 | Happy path | (none) | 200 | 7 |
+| 2 | Company not found | company_id=99999 | 404 | -- |
+| 3 | Cross-tenant isolation | company_id=2 | 200 | 0 |
+| 4 | Limit pagination | limit=2 | 200 | 2 (of 7) |
+| 5 | Offset pagination | limit=2&offset=2 | 200 | 2 (of 7) |
+| 6 | Offset beyond total | offset=100 | 200 | 0 (of 7) |
+| 7 | 20-day lookback | days=20 | 200 | < 7 |
+| 8 | 1-day lookback | days=1 | 200 | 0 |
+| 9 | Invalid days | days=abc | 400 | -- |
+| 10 | Negative days | days=-5 | 400 | -- |
+| 11 | Zero limit | limit=0 | 400 | -- |
+| 12 | Negative offset | offset=-1 | 400 | -- |
+| 13 | Supplier data structure | (from Test 1) | 200 | primary supplier |
+| 14 | Null supplier | (from Test 1) | 200 | supplier=null |
+| 15 | Reserved stock deduction | (from Test 1) | 200 | current_stock=10 |
+| 16 | Custom threshold | (from Test 1) | 200 | threshold=25 |
+| 17 | Sorting order | (from Test 1) | 200 | ascending urgency |
+
+---
+
 ## Files
 
 | File | Purpose |
-|------|---------|
+| --- | --- |
 | `alerts.py` | The low-stock alerts endpoint implementation |
 | `models.py` | SQLAlchemy models (subset of Part 2 schema) |
 | `app.py` | Flask app factory |
+| `seed.py` | Database seeding script for Postman testing |
 | `test_alerts.py` | 32 pytest tests |
 | `requirements.txt` | Dependencies |
 | `README.md` | This documentation |
